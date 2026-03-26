@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -5,23 +6,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Chore Wheel">
-<title>Family Chore Wheel - Dev</title>
-
-<!-- ============================================================
-  🔥 FIREBASE SETUP — COMPLETE THESE STEPS ONCE
-  ============================================================
-  STEP 1: Go to https://firebase.google.com → Sign in with Google
-  STEP 2: Click "Get started" → "Create a project" → Name it anything → Continue
-  STEP 3: Disable Google Analytics → Create project
-  STEP 4: On the project homepage click the </> Web icon
-           → App nickname: "Chore Wheel" → Register app
-  STEP 5: Copy the firebaseConfig values and paste them below
-           replacing each "PASTE_..._HERE" placeholder
-  STEP 6: In the left sidebar: Build → Realtime Database → Create Database
-           → Select a location → Start in TEST MODE → Enable
-  STEP 7: Deploy this file to Netlify and share the link with your family!
-  ============================================================ -->
+<meta name="apple-mobile-web-app-title" content="The Martinez Wheel">
+<title>The Martinez Wheel</title>
+<!-- v1.1.0 — Family branding + color theme picker -->
 
 <script type="module">
   import { initializeApp }
@@ -29,7 +16,6 @@
   import { getDatabase, ref, set, get, onValue }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-  // ✏️ PASTE YOUR FIREBASE CONFIG HERE (replace every PASTE_..._HERE value):
   const firebaseConfig = {
     apiKey:            "AIzaSyCiSd_f-ZrbO1KcD1Z1lG51oDKlZHtYDL0",
     authDomain:        "family-chorewheel-app.firebaseapp.com",
@@ -42,9 +28,7 @@
 
   const FIREBASE_READY = !firebaseConfig.apiKey.includes('PASTE');
   let db;
-  if (FIREBASE_READY) {
-    db = getDatabase(initializeApp(firebaseConfig));
-  }
+  if (FIREBASE_READY) db = getDatabase(initializeApp(firebaseConfig));
 
   // ---- CONSTANTS ----
   const COLORS  = ['#FF6B6B','#4ECDC4','#FFE66D','#A8DADC','#C3B1E1','#F9C74F','#90BE6D','#F8961E'];
@@ -52,9 +36,22 @@
   const AVATARS = ['👩','👨','🧒','👦','👧','🧑','👴','👵'];
   const DAYS    = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
+  // ---- THEME PRESETS ----
+  const THEMES = [
+    { name:'Coral Sunset',  primary:'#FF6B6B', secondary:'#4ECDC4', accent:'#FFE66D', bg:'#FFF8F0', emoji:'🌅' },
+    { name:'Ocean Breeze',  primary:'#0077B6', secondary:'#48CAE4', accent:'#ADE8F4', bg:'#EFF9FF', emoji:'🌊' },
+    { name:'Forest Walk',   primary:'#2D6A4F', secondary:'#74C69D', accent:'#D8F3DC', bg:'#F0FFF4', emoji:'🌿' },
+    { name:'Berry Pop',     primary:'#9B2335', secondary:'#C3B1E1', accent:'#FFB3C1', bg:'#FFF0F5', emoji:'🫐' },
+    { name:'Golden Hour',   primary:'#E76F51', secondary:'#F4A261', accent:'#FFE8A3', bg:'#FFFBF0', emoji:'✨' },
+    { name:'Midnight',      primary:'#5E60CE', secondary:'#48BFE3', accent:'#C77DFF', bg:'#F3F0FF', emoji:'🌙' },
+    { name:'Flamingo',      primary:'#FF6EB4', secondary:'#FF9ECD', accent:'#FFD6EC', bg:'#FFF5FA', emoji:'🦩' },
+    { name:'Slate Modern',  primary:'#2D3436', secondary:'#636E72', accent:'#DFE6E9', bg:'#F8F9FA', emoji:'🖤' },
+  ];
+
   let state = {};
   let currentPin = null;
   let pendingReassign = null;
+  let activeTheme = THEMES[0];
 
   // ---- HELPERS ----
   function getWeekStart() {
@@ -70,12 +67,32 @@
   }
   function getTodayIdx() { return new Date().getDay(); }
   function shuffle(a) {
-    a = [...a];
-    for (let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}
-    return a;
+    a=[...a]; for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a;
   }
   function blankDays() { return [false,false,false,false,false,false,false]; }
   function dbPath() { return `families/${currentPin}`; }
+
+  // ---- THEME ENGINE ----
+  function applyTheme(t) {
+    activeTheme = t;
+    const r = document.documentElement.style;
+    r.setProperty('--primary',   t.primary);
+    r.setProperty('--secondary', t.secondary);
+    r.setProperty('--accent',    t.accent);
+    r.setProperty('--bg',        t.bg);
+    // Update PIN screen background
+    const ps = document.getElementById('pinScreen');
+    if(ps) ps.style.background = t.primary;
+    // Save preference locally
+    try { localStorage.setItem('cw_theme', JSON.stringify(t)); } catch(e){}
+  }
+
+  function loadSavedTheme() {
+    try {
+      const saved = localStorage.getItem('cw_theme');
+      if(saved) applyTheme(JSON.parse(saved));
+    } catch(e){}
+  }
 
   // ---- SAVE / LOAD ----
   function localSave() {
@@ -86,18 +103,16 @@
   }
   async function cloudSave() {
     localSave();
-    if (!FIREBASE_READY||!currentPin) return;
+    if(!FIREBASE_READY||!currentPin) return;
     try { await set(ref(db,dbPath()), state); showSync(); } catch(e){}
   }
   function showSync() {
-    const b=document.getElementById('syncBadge');
-    if(!b) return;
-    b.style.opacity='1';
-    setTimeout(()=>{ b.style.opacity='0'; },2000);
+    const b=document.getElementById('syncBadge'); if(!b) return;
+    b.style.opacity='1'; setTimeout(()=>{b.style.opacity='0';},2000);
   }
   function subscribeCloud() {
-    if (!FIREBASE_READY||!currentPin) return;
-    onValue(ref(db,dbPath()), snap => {
+    if(!FIREBASE_READY||!currentPin) return;
+    onValue(ref(db,dbPath()), snap=>{
       const d=snap.val();
       if(d){ state=d; ensureArrays(); render(); showSync(); }
     });
@@ -134,32 +149,24 @@
   // ---- PIN ----
   window.handlePinKey = e => { if(e.key==='Enter') window.submitPin(); };
   window.submitPin = async function() {
-    const raw = document.getElementById('pinInput').value.trim();
+    const raw=document.getElementById('pinInput').value.trim();
     if(raw.length<4){ document.getElementById('pinError').textContent='PIN must be at least 4 characters.'; return; }
-    currentPin = raw.toLowerCase().replace(/\s+/g,'');
+    currentPin=raw.toLowerCase().replace(/\s+/g,'');
     localStorage.setItem('lastPin',currentPin);
-    document.getElementById('pinError').textContent = FIREBASE_READY ? '⏳ Connecting...' : '📱 Loading...';
-
+    document.getElementById('pinError').textContent=FIREBASE_READY?'⏳ Connecting...':'📱 Loading...';
     if(FIREBASE_READY) {
       try {
-        const snap = await get(ref(db,dbPath()));
+        const snap=await get(ref(db,dbPath()));
         if(snap.exists()){ state=snap.val(); ensureArrays(); }
         else { state=defaultState(); await set(ref(db,dbPath()),state); }
-      } catch(e) {
-        const local=localLoad(currentPin);
-        state = local||defaultState();
-      }
+      } catch(e) { const local=localLoad(currentPin); state=local||defaultState(); }
     } else {
-      const local=localLoad(currentPin);
-      state = local||defaultState();
+      const local=localLoad(currentPin); state=local||defaultState();
     }
-
     autoAssign();
     document.getElementById('pinScreen').style.display='none';
     document.getElementById('appShell').style.display='block';
-    updateStatusBar();
-    subscribeCloud();
-    render();
+    updateStatusBar(); subscribeCloud(); render();
   };
   window.logout = function() {
     currentPin=null;
@@ -168,20 +175,17 @@
   };
 
   function autoAssign() {
-    if(!state.assignments.length && state.members.length && state.chores.length) {
-      const members=shuffle([...state.members]), chores=shuffle([...state.chores]);
-      state.assignments=chores.map((c,i)=>({
-        memberId:members[i%members.length].id, choreId:c.id, done:false, days:blankDays()
-      }));
+    if(!state.assignments.length&&state.members.length&&state.chores.length) {
+      const members=shuffle([...state.members]),chores=shuffle([...state.chores]);
+      state.assignments=chores.map((c,i)=>({memberId:members[i%members.length].id,choreId:c.id,done:false,days:blankDays()}));
       cloudSave();
     }
   }
-
   function updateStatusBar() {
-    const dot=document.getElementById('onlineDot'), lbl=document.getElementById('onlineLabel');
+    const dot=document.getElementById('onlineDot'),lbl=document.getElementById('onlineLabel');
     if(!dot) return;
-    if(FIREBASE_READY){ dot.style.background='#4CAF50'; lbl.textContent='🔥 Live sync enabled — all devices share this wheel'; }
-    else { dot.style.background='#FFE66D'; lbl.textContent='💾 Local mode — add Firebase config to enable sync'; }
+    if(FIREBASE_READY){ dot.style.background='#4CAF50'; lbl.textContent='🔥 Live sync — all devices share this wheel'; }
+    else { dot.style.background='#FFE66D'; lbl.textContent='💾 Local mode'; }
   }
 
   // ---- RENDER ----
@@ -201,12 +205,12 @@
     const today=getTodayIdx();
     list.innerHTML=state.assignments.map((a,i)=>{
       const member=state.members.find(m=>m.id===a.memberId);
-      const chore =state.chores.find(c=>c.id===a.choreId);
+      const chore=state.chores.find(c=>c.id===a.choreId);
       if(!member||!chore) return '';
       if(!a.days) a.days=blankDays();
-      const count=a.days.filter(Boolean).length, allDone=count===7;
+      const count=a.days.filter(Boolean).length,allDone=count===7;
       const boxes=DAYS.map((d,di)=>{
-        const isToday=di===today, checked=a.days[di];
+        const isToday=di===today,checked=a.days[di];
         return `<div class="day-cell">
           <span class="day-label${isToday?' today':''}">${d}</span>
           <div class="day-check${checked?' checked':''}${isToday&&!checked?' today-cell':''}"
@@ -233,8 +237,8 @@
     const done=state.assignments.reduce((s,a)=>s+(a.days?a.days.filter(Boolean).length:0),0);
     const pct=total?Math.round(done/total*100):0;
     const all=state.assignments.length>0&&state.assignments.every(a=>a.days&&a.days.every(Boolean));
-    const el=document.getElementById('progressLabel'), bar=document.getElementById('progressBar');
-    if(el)  el.textContent=`${done} of ${total} daily tasks done ${all?'🎉':''}`;
+    const el=document.getElementById('progressLabel'),bar=document.getElementById('progressBar');
+    if(el) el.textContent=`${done} of ${total} daily tasks done ${all?'🎉':''}`;
     if(bar) bar.style.width=pct+'%';
   }
 
@@ -289,6 +293,64 @@
     }).join('');
   }
 
+  // ---- THEME PANEL ----
+  window.openThemePanel = function() {
+    const panel = document.getElementById('themePanel');
+    // Render preset swatches
+    const swatches = document.getElementById('themeSWatches');
+    swatches.innerHTML = THEMES.map((t,i)=>`
+      <div class="theme-swatch${JSON.stringify(activeTheme)===JSON.stringify(t)?' active':''}"
+        style="background:${t.primary}" onclick="pickPreset(${i})" title="${t.name}">
+        <span class="swatch-emoji">${t.emoji}</span>
+        <span class="swatch-name">${t.name}</span>
+      </div>`).join('');
+    // Set custom color inputs to current theme
+    document.getElementById('cpPrimary').value   = activeTheme.primary;
+    document.getElementById('cpSecondary').value = activeTheme.secondary;
+    document.getElementById('cpAccent').value    = activeTheme.accent;
+    document.getElementById('cpBg').value        = activeTheme.bg;
+    panel.classList.add('open');
+  };
+  window.closeThemePanel = function() {
+    document.getElementById('themePanel').classList.remove('open');
+  };
+  window.pickPreset = function(idx) {
+    applyTheme(THEMES[idx]);
+    // Update active swatch highlight
+    document.querySelectorAll('.theme-swatch').forEach((s,i)=>{
+      s.classList.toggle('active', i===idx);
+    });
+    // Sync custom pickers to preset
+    document.getElementById('cpPrimary').value   = THEMES[idx].primary;
+    document.getElementById('cpSecondary').value = THEMES[idx].secondary;
+    document.getElementById('cpAccent').value    = THEMES[idx].accent;
+    document.getElementById('cpBg').value        = THEMES[idx].bg;
+  };
+  window.applyCustomTheme = function() {
+    const custom = {
+      name: 'Custom',
+      primary:   document.getElementById('cpPrimary').value,
+      secondary: document.getElementById('cpSecondary').value,
+      accent:    document.getElementById('cpAccent').value,
+      bg:        document.getElementById('cpBg').value,
+      emoji: '🎨'
+    };
+    applyTheme(custom);
+    document.querySelectorAll('.theme-swatch').forEach(s=>s.classList.remove('active'));
+    showToast('Custom theme applied! 🎨');
+  };
+  window.resetTheme = function() {
+    applyTheme(THEMES[0]);
+    showToast('Theme reset to default!');
+    window.closeThemePanel();
+  };
+
+  function showToast(msg) {
+    const t=document.getElementById('toast');
+    t.textContent=msg; t.style.opacity='1'; t.style.transform='translateY(0)';
+    setTimeout(()=>{t.style.opacity='0'; t.style.transform='translateY(20px)';},2500);
+  }
+
   // ---- ACTIONS ----
   window.toggleDay = function(ai,di) {
     if(!state.assignments[ai].days) state.assignments[ai].days=blankDays();
@@ -298,19 +360,16 @@
   };
   window.reassign = function() {
     if(!state.members.length){alert('Add family members first!');return;}
-    if(!state.chores.length) {alert('Add some chores first!');return;}
+    if(!state.chores.length){alert('Add some chores first!');return;}
     if(!confirm('Reshuffle all chore assignments for this week?')) return;
-    if(state.assignments.length){
-      if(!state.history) state.history=[];
-      state.history.push({weekStart:state.weekStart,assignments:[...state.assignments]});
-    }
+    if(state.assignments.length){ if(!state.history) state.history=[]; state.history.push({weekStart:state.weekStart,assignments:[...state.assignments]}); }
     state.weekStart=getWeekStart();
-    const members=shuffle([...state.members]), chores=shuffle([...state.chores]);
+    const members=shuffle([...state.members]),chores=shuffle([...state.chores]);
     state.assignments=chores.map((c,i)=>({memberId:members[i%members.length].id,choreId:c.id,done:false,days:blankDays()}));
     cloudSave(); render();
   };
   window.openReassign = function(idx) {
-    const a=state.assignments[idx], chore=state.chores.find(c=>c.id===a.choreId);
+    const a=state.assignments[idx],chore=state.chores.find(c=>c.id===a.choreId);
     pendingReassign=idx;
     document.getElementById('modalChoreLabel').textContent=`${chore?.icon} ${chore?.name}`;
     document.getElementById('modalMemberSelect').innerHTML=state.members.map(m=>
@@ -323,7 +382,7 @@
     window.closeModal(); cloudSave(); renderAssignments();
   };
   window.addMember = function() {
-    const inp=document.getElementById('memberInput'), name=inp.value.trim(); if(!name) return;
+    const inp=document.getElementById('memberInput'),name=inp.value.trim(); if(!name) return;
     const idx=state.members.length%COLORS.length;
     state.members.push({id:state.nextId++,name,color:COLORS[idx],emoji:AVATARS[idx]||'😊'});
     inp.value=''; cloudSave(); renderMembers();
@@ -335,7 +394,7 @@
     cloudSave(); render();
   };
   window.startEditMember = function(id) {
-    const m=state.members.find(x=>x.id===id), item=document.getElementById('mi-'+id);
+    const m=state.members.find(x=>x.id===id),item=document.getElementById('mi-'+id);
     item.innerHTML=`
       <div class="member-avatar" style="background:${m.color};width:40px;height:40px;font-size:1.1rem;flex-shrink:0">${m.emoji}</div>
       <div class="inline-edit-form">
@@ -348,13 +407,11 @@
   };
   window.saveEditMember = function(id) {
     const v=document.getElementById('em-'+id)?.value.trim(); if(!v) return;
-    state.members.find(x=>x.id===id).name=v;
-    cloudSave(); renderMembers(); renderAssignments();
+    state.members.find(x=>x.id===id).name=v; cloudSave(); renderMembers(); renderAssignments();
   };
   window.renderMembersW = ()=>renderMembers();
-
   window.addChore = function() {
-    const inp=document.getElementById('choreInput'), name=inp.value.trim(); if(!name) return;
+    const inp=document.getElementById('choreInput'),name=inp.value.trim(); if(!name) return;
     const idx=state.chores.length%EMOJIS.length;
     state.chores.push({id:state.nextId++,name,icon:EMOJIS[idx]});
     inp.value=''; cloudSave(); renderChores();
@@ -365,7 +422,7 @@
     cloudSave(); render();
   };
   window.startEditChore = function(id) {
-    const c=state.chores.find(x=>x.id===id), item=document.getElementById('ci-'+id);
+    const c=state.chores.find(x=>x.id===id),item=document.getElementById('ci-'+id);
     item.innerHTML=`
       <span class="chore-icon">${c.icon||'📌'}</span>
       <div class="inline-edit-form">
@@ -378,11 +435,9 @@
   };
   window.saveEditChore = function(id) {
     const v=document.getElementById('ec-'+id)?.value.trim(); if(!v) return;
-    state.chores.find(x=>x.id===id).name=v;
-    cloudSave(); renderChores(); renderAssignments();
+    state.chores.find(x=>x.id===id).name=v; cloudSave(); renderChores(); renderAssignments();
   };
   window.renderChoresW = ()=>renderChores();
-
   window.switchTab = function(tab,el) {
     document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
@@ -391,37 +446,46 @@
   };
 
   // ---- BOOT ----
+  loadSavedTheme();
   const lastPin=localStorage.getItem('lastPin');
   if(lastPin){ document.getElementById('pinInput').value=lastPin; document.getElementById('pinHint').textContent=`Last used: ${lastPin}`; }
 </script>
 
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');
-  :root{--bg:#FFF8F0;--primary:#FF6B6B;--secondary:#4ECDC4;--accent:#FFE66D;--text:#2D3436;--muted:#888;--border:#f0e8df;--shadow:0 4px 20px rgba(0,0,0,0.08);--radius:20px;}
+  :root{
+    --bg:#FFF8F0; --primary:#FF6B6B; --secondary:#4ECDC4;
+    --accent:#FFE66D; --text:#2D3436; --muted:#888; --border:#f0e8df;
+    --shadow:0 4px 20px rgba(0,0,0,0.08); --radius:20px;
+  }
   *{box-sizing:border-box;margin:0;padding:0;}
-  body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;}
-  body::before{content:'';position:fixed;top:-100px;right:-100px;width:400px;height:400px;background:radial-gradient(circle,rgba(255,107,107,0.12),transparent 70%);pointer-events:none;z-index:0;}
-  body::after {content:'';position:fixed;bottom:-80px;left:-80px;width:350px;height:350px;background:radial-gradient(circle,rgba(78,205,196,0.12),transparent 70%);pointer-events:none;z-index:0;}
+  body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;transition:background 0.4s ease;}
+  body::before{content:'';position:fixed;top:-100px;right:-100px;width:400px;height:400px;background:radial-gradient(circle,rgba(255,107,107,0.1),transparent 70%);pointer-events:none;z-index:0;}
+  body::after{content:'';position:fixed;bottom:-80px;left:-80px;width:350px;height:350px;background:radial-gradient(circle,rgba(78,205,196,0.1),transparent 70%);pointer-events:none;z-index:0;}
 
-  /* PIN */
-  #pinScreen{position:fixed;inset:0;background:var(--primary);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;padding:32px 24px;}
-  .pin-logo{font-family:'Fredoka One',cursive;font-size:3rem;color:white;margin-bottom:6px;}
-  .pin-sub {color:rgba(255,255,255,0.82);font-size:0.88rem;margin-bottom:32px;text-align:center;}
-  .pin-box {background:white;border-radius:24px;padding:28px 22px;width:100%;max-width:340px;box-shadow:0 20px 60px rgba(0,0,0,0.2);}
+  /* PIN SCREEN */
+  #pinScreen{position:fixed;inset:0;background:var(--primary);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;padding:32px 24px;transition:background 0.4s ease;}
+  .pin-logo{font-family:'Fredoka One',cursive;font-size:2.6rem;color:white;margin-bottom:4px;text-align:center;}
+  .pin-family{font-family:'Fredoka One',cursive;font-size:1.1rem;color:rgba(255,255,255,0.75);margin-bottom:28px;text-align:center;letter-spacing:1px;}
+  .pin-box{background:white;border-radius:24px;padding:28px 22px;width:100%;max-width:340px;box-shadow:0 20px 60px rgba(0,0,0,0.2);}
   .pin-box h2{font-family:'Fredoka One',cursive;font-size:1.25rem;margin-bottom:6px;}
-  .pin-box p {font-size:0.8rem;color:var(--muted);margin-bottom:16px;line-height:1.5;}
-  .pin-input {width:100%;padding:13px 18px;border:2.5px solid var(--border);border-radius:50px;font-family:'Nunito',sans-serif;font-size:1.05rem;font-weight:800;letter-spacing:3px;text-align:center;outline:none;margin-bottom:12px;}
+  .pin-box p{font-size:0.8rem;color:var(--muted);margin-bottom:16px;line-height:1.5;}
+  .pin-input{width:100%;padding:13px 18px;border:2.5px solid var(--border);border-radius:50px;font-family:'Nunito',sans-serif;font-size:1.05rem;font-weight:800;letter-spacing:3px;text-align:center;outline:none;margin-bottom:12px;transition:border-color 0.2s;}
   .pin-input:focus{border-color:var(--primary);}
-  .pin-btn  {width:100%;padding:14px;background:var(--primary);color:white;border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:1rem;cursor:pointer;}
+  .pin-btn{width:100%;padding:14px;background:var(--primary);color:white;border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:1rem;cursor:pointer;transition:opacity 0.2s;}
+  .pin-btn:active{opacity:0.85;}
   .pin-error{color:var(--primary);font-size:0.8rem;font-weight:700;min-height:20px;margin-top:10px;text-align:center;}
-  .pin-hint {font-size:0.72rem;color:var(--muted);text-align:center;margin-top:6px;}
+  .pin-hint{font-size:0.72rem;color:var(--muted);text-align:center;margin-top:6px;}
 
   /* APP */
   #appShell{display:none;}
-  header{background:var(--primary);color:white;padding:14px 18px 10px;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(255,107,107,0.3);}
+  header{background:var(--primary);color:white;padding:14px 18px 10px;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(0,0,0,0.15);transition:background 0.4s ease;}
   .hdr-top{display:flex;align-items:center;justify-content:space-between;}
-  header h1{font-family:'Fredoka One',cursive;font-size:1.45rem;}
-  .logout-btn{background:rgba(255,255,255,0.22);border:none;color:white;border-radius:50px;padding:6px 14px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.76rem;cursor:pointer;}
+  .hdr-title{font-family:'Fredoka One',cursive;font-size:1.3rem;line-height:1.1;}
+  .hdr-subtitle{font-size:0.65rem;opacity:0.75;font-weight:600;letter-spacing:0.5px;margin-top:1px;}
+  .hdr-actions{display:flex;gap:8px;align-items:center;}
+  .theme-btn{background:rgba(255,255,255,0.22);border:none;color:white;border-radius:50px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.76rem;cursor:pointer;}
+  .logout-btn{background:rgba(255,255,255,0.22);border:none;color:white;border-radius:50px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.76rem;cursor:pointer;}
   .hdr-meta{display:flex;align-items:center;gap:10px;margin-top:4px;}
   .week-sub{font-size:0.74rem;opacity:0.85;}
   .sync-badge{font-size:0.68rem;font-weight:800;background:rgba(255,255,255,0.25);padding:2px 10px;border-radius:50px;transition:opacity 0.5s;opacity:0;}
@@ -438,7 +502,7 @@
 
   .week-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
   .week-label{font-family:'Fredoka One',cursive;font-size:1.15rem;color:var(--primary);}
-  .spin-btn{background:var(--accent);border:none;border-radius:50px;padding:8px 16px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.8rem;cursor:pointer;color:var(--text);box-shadow:0 3px 10px rgba(255,230,109,0.4);}
+  .spin-btn{background:var(--accent);border:none;border-radius:50px;padding:8px 16px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.8rem;cursor:pointer;color:var(--text);box-shadow:0 3px 10px rgba(0,0,0,0.1);}
   .spin-btn:active{transform:scale(0.95);}
 
   .progress-label{font-size:0.76rem;color:var(--muted);margin-bottom:5px;font-weight:700;}
@@ -494,6 +558,7 @@
   .inline-save-btn{background:var(--secondary);color:white;border:none;border-radius:50px;padding:7px 13px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.8rem;cursor:pointer;}
   .inline-cancel-btn{background:#f0f0f0;color:#888;border:none;border-radius:50px;padding:7px 10px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.8rem;cursor:pointer;}
 
+  /* REASSIGN MODAL */
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200;display:none;align-items:flex-end;}
   .modal-overlay.open{display:flex;}
   .modal{background:white;border-radius:26px 26px 0 0;padding:22px 20px 40px;width:100%;animation:slideUp 0.25s ease;}
@@ -502,18 +567,41 @@
   .modal-close{float:right;background:#f0f0f0;border:none;border-radius:50%;width:30px;height:30px;cursor:pointer;font-size:0.9rem;}
   select{width:100%;padding:12px 15px;border:2px solid var(--border);border-radius:13px;font-family:'Nunito',sans-serif;font-size:0.9rem;outline:none;margin-bottom:11px;background:white;}
   .confirm-btn{width:100%;padding:14px;background:var(--primary);color:white;border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.98rem;cursor:pointer;margin-top:5px;}
+
+  /* THEME PANEL */
+  .theme-panel-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:300;display:none;align-items:flex-end;}
+  .theme-panel-overlay.open{display:flex;}
+  .theme-panel{background:white;border-radius:28px 28px 0 0;padding:22px 20px 44px;width:100%;max-height:88vh;overflow-y:auto;animation:slideUp 0.28s ease;}
+  .theme-panel-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
+  .theme-panel-hdr h3{font-family:'Fredoka One',cursive;font-size:1.3rem;}
+  .theme-panel-close{background:#f0f0f0;border:none;border-radius:50%;width:32px;height:32px;cursor:pointer;font-size:1rem;}
+  .theme-section-label{font-weight:800;font-size:0.82rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;margin-top:18px;}
+  .theme-swatches{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:6px;}
+  .theme-swatch{border-radius:14px;padding:12px 6px 8px;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;border:3px solid transparent;transition:all 0.18s;}
+  .theme-swatch.active{border-color:var(--text);transform:scale(1.06);}
+  .swatch-emoji{font-size:1.4rem;}
+  .swatch-name{font-size:0.62rem;font-weight:800;color:white;text-align:center;line-height:1.2;}
+  .custom-section{background:#f8f8f8;border-radius:16px;padding:16px;margin-top:6px;}
+  .color-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+  .color-row label{font-size:0.85rem;font-weight:700;color:var(--text);}
+  .color-row input[type=color]{width:52px;height:36px;border:none;border-radius:10px;cursor:pointer;padding:2px;}
+  .apply-custom-btn{width:100%;padding:13px;background:var(--primary);color:white;border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.95rem;cursor:pointer;margin-top:4px;}
+  .reset-theme-btn{width:100%;padding:11px;background:#f0f0f0;color:var(--muted);border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.88rem;cursor:pointer;margin-top:10px;}
+
+  /* TOAST */
+  #toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--text);color:white;padding:10px 22px;border-radius:50px;font-size:0.85rem;font-weight:700;opacity:0;transition:opacity 0.3s,transform 0.3s;z-index:500;pointer-events:none;white-space:nowrap;}
 </style>
 </head>
 <body>
 
 <!-- PIN SCREEN -->
 <div id="pinScreen">
-  <div class="pin-logo">🏠 Chore Wheel</div>
-  <div class="pin-sub">One PIN · Every phone · All in sync</div>
+  <div class="pin-logo">🏠 The Martinez Wheel</div>
+  <div class="pin-family">Family Chore Tracker</div>
   <div class="pin-box">
     <h2>Enter Family PIN</h2>
     <p>Choose any PIN your family shares. Everyone who enters the same PIN sees — and updates — the same chore wheel in real time.</p>
-    <input class="pin-input" id="pinInput" type="text" placeholder="e.g. smith2024"
+    <input class="pin-input" id="pinInput" type="text" placeholder="e.g. martinez2024"
       maxlength="20" onkeydown="handlePinKey(event)" autocomplete="off" autocorrect="off" spellcheck="false">
     <button class="pin-btn" onclick="submitPin()">Enter the Wheel →</button>
     <div class="pin-error" id="pinError"></div>
@@ -525,8 +613,14 @@
 <div id="appShell">
   <header>
     <div class="hdr-top">
-      <h1>🏠 Chore Wheel</h1>
-      <button class="logout-btn" onclick="logout()">Switch PIN</button>
+      <div>
+        <div class="hdr-title">🏠 The Martinez Wheel</div>
+        <div class="hdr-subtitle">FAMILY CHORE TRACKER</div>
+      </div>
+      <div class="hdr-actions">
+        <button class="theme-btn" onclick="openThemePanel()">🎨 Theme</button>
+        <button class="logout-btn" onclick="logout()">Switch PIN</button>
+      </div>
     </div>
     <div class="hdr-meta">
       <span class="week-sub" id="weekLabel">Loading…</span>
@@ -578,6 +672,7 @@
     <div id="historyList"></div>
   </div>
 
+  <!-- Reassign Modal -->
   <div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
     <div class="modal">
       <button class="modal-close" onclick="closeModal()">✕</button>
@@ -588,6 +683,44 @@
     </div>
   </div>
 </div>
+
+<!-- THEME PANEL -->
+<div class="theme-panel-overlay" id="themePanel" onclick="if(event.target===this)closeThemePanel()">
+  <div class="theme-panel">
+    <div class="theme-panel-hdr">
+      <h3>🎨 Choose a Theme</h3>
+      <button class="theme-panel-close" onclick="closeThemePanel()">✕</button>
+    </div>
+
+    <div class="theme-section-label">Preset Palettes</div>
+    <div class="theme-swatches" id="themeSWatches"></div>
+
+    <div class="theme-section-label">Custom Colors</div>
+    <div class="custom-section">
+      <div class="color-row">
+        <label>Primary Color</label>
+        <input type="color" id="cpPrimary" value="#FF6B6B">
+      </div>
+      <div class="color-row">
+        <label>Secondary Color</label>
+        <input type="color" id="cpSecondary" value="#4ECDC4">
+      </div>
+      <div class="color-row">
+        <label>Accent Color</label>
+        <input type="color" id="cpAccent" value="#FFE66D">
+      </div>
+      <div class="color-row">
+        <label>Background Color</label>
+        <input type="color" id="cpBg" value="#FFF8F0">
+      </div>
+      <button class="apply-custom-btn" onclick="applyCustomTheme()">✓ Apply Custom Theme</button>
+    </div>
+    <button class="reset-theme-btn" onclick="resetTheme()">↺ Reset to Default</button>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
 
 </body>
 </html>
