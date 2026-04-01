@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -8,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="The Martinez Wheel">
 <title>The Martinez Wheel</title>
-<!-- v1.1.0 — Family branding + color theme picker -->
+<!-- v1.2.0 — Push notifications + per-person reminders -->
 
 <script type="module">
   import { initializeApp }
@@ -48,10 +47,22 @@
     { name:'Slate Modern',  primary:'#2D3436', secondary:'#636E72', accent:'#DFE6E9', bg:'#F8F9FA', emoji:'🖤' },
   ];
 
+  // ---- DEFAULT NOTIFICATION SETTINGS ----
+  const DEFAULT_NOTIF_SETTINGS = {
+    enabled: false,           // master toggle
+    dailyReminder: true,      // daily check-off nudge
+    overdueAlert: true,       // end of day overdue alert
+    completionCelebration: true, // all done celebration
+    reminderTime: '18:00',    // default 6pm
+    adminReminderTime: '18:00' // family-wide default
+  };
+
   let state = {};
   let currentPin = null;
   let pendingReassign = null;
   let activeTheme = THEMES[0];
+  let notifSettings = {...DEFAULT_NOTIF_SETTINGS};
+  let notifTimers = [];
 
   // ---- HELPERS ----
   function getWeekStart() {
@@ -80,18 +91,120 @@
     r.setProperty('--secondary', t.secondary);
     r.setProperty('--accent',    t.accent);
     r.setProperty('--bg',        t.bg);
-    // Update PIN screen background
     const ps = document.getElementById('pinScreen');
     if(ps) ps.style.background = t.primary;
-    // Save preference locally
     try { localStorage.setItem('cw_theme', JSON.stringify(t)); } catch(e){}
   }
-
   function loadSavedTheme() {
+    try { const s=localStorage.getItem('cw_theme'); if(s) applyTheme(JSON.parse(s)); } catch(e){}
+  }
+
+  // ---- NOTIFICATION ENGINE ----
+  function loadNotifSettings() {
     try {
-      const saved = localStorage.getItem('cw_theme');
-      if(saved) applyTheme(JSON.parse(saved));
+      const s = localStorage.getItem('cw_notif');
+      if(s) notifSettings = {...DEFAULT_NOTIF_SETTINGS, ...JSON.parse(s)};
     } catch(e){}
+  }
+  function saveNotifSettings() {
+    try { localStorage.setItem('cw_notif', JSON.stringify(notifSettings)); } catch(e){}
+  }
+
+  async function requestNotifPermission() {
+    if(!('Notification' in window)) return false;
+    if(Notification.permission === 'granted') return true;
+    if(Notification.permission === 'denied') return false;
+    const result = await Notification.requestPermission();
+    return result === 'granted';
+  }
+
+  function sendNotification(title, body, icon='🏠') {
+    if(!('Notification' in window) || Notification.permission !== 'granted') return;
+    if(!notifSettings.enabled) return;
+    try {
+      new Notification(`${icon} ${title}`, {
+        body,
+        icon: '/favicon.ico',
+        badge: '/favicon.ico',
+        tag: 'chorewheel-' + Date.now()
+      });
+    } catch(e){}
+  }
+
+  function getMyChores() {
+    // Returns assignments for today that aren't done
+    const todayIdx = getTodayIdx();
+    return state.assignments?.filter(a => {
+      if(!a.days) return false;
+      return !a.days[todayIdx];
+    }) || [];
+  }
+
+  function getAllDoneToday() {
+    const todayIdx = getTodayIdx();
+    return state.assignments?.length > 0 &&
+      state.assignments.every(a => a.days && a.days[todayIdx]);
+  }
+
+  function scheduleNotifications() {
+    // Clear existing timers
+    notifTimers.forEach(t => clearTimeout(t));
+    notifTimers = [];
+    if(!notifSettings.enabled) return;
+
+    const now = new Date();
+    const [rHour, rMin] = notifSettings.reminderTime.split(':').map(Number);
+
+    // --- Daily Reminder ---
+    if(notifSettings.dailyReminder) {
+      const reminderTime = new Date();
+      reminderTime.setHours(rHour, rMin, 0, 0);
+      if(reminderTime <= now) reminderTime.setDate(reminderTime.getDate() + 1);
+      const msUntilReminder = reminderTime - now;
+      const t1 = setTimeout(() => {
+        const pending = getMyChores();
+        if(pending.length > 0) {
+          sendNotification(
+            'The Martinez Wheel 🎡',
+            `You have ${pending.length} chore${pending.length>1?'s':''} to check off today!`,
+            '🔔'
+          );
+        }
+        scheduleNotifications(); // reschedule for tomorrow
+      }, msUntilReminder);
+      notifTimers.push(t1);
+    }
+
+    // --- Overdue Alert at 9pm ---
+    if(notifSettings.overdueAlert) {
+      const overdueTime = new Date();
+      overdueTime.setHours(21, 0, 0, 0);
+      if(overdueTime <= now) overdueTime.setDate(overdueTime.getDate() + 1);
+      const msUntilOverdue = overdueTime - now;
+      const t2 = setTimeout(() => {
+        const pending = getMyChores();
+        if(pending.length > 0) {
+          sendNotification(
+            '⚠️ Chores Overdue!',
+            `${pending.length} chore${pending.length>1?'s are':' is'} still not done today. Don't forget!`,
+            '⚠️'
+          );
+        }
+      }, msUntilOverdue);
+      notifTimers.push(t2);
+    }
+  }
+
+  // Check for completion celebration after each toggle
+  function checkCompletionCelebration() {
+    if(!notifSettings.enabled || !notifSettings.completionCelebration) return;
+    if(getAllDoneToday()) {
+      sendNotification(
+        '🎉 All Done Today!',
+        'Amazing — every chore on The Martinez Wheel is checked off for today!',
+        '🎉'
+      );
+    }
   }
 
   // ---- SAVE / LOAD ----
@@ -167,8 +280,13 @@
     document.getElementById('pinScreen').style.display='none';
     document.getElementById('appShell').style.display='block';
     updateStatusBar(); subscribeCloud(); render();
+    // Load and apply notification settings
+    loadNotifSettings();
+    updateNotifUI();
+    if(notifSettings.enabled) scheduleNotifications();
   };
   window.logout = function() {
+    notifTimers.forEach(t=>clearTimeout(t)); notifTimers=[];
     currentPin=null;
     document.getElementById('pinScreen').style.display='flex';
     document.getElementById('appShell').style.display='none';
@@ -186,6 +304,112 @@
     if(!dot) return;
     if(FIREBASE_READY){ dot.style.background='#4CAF50'; lbl.textContent='🔥 Live sync — all devices share this wheel'; }
     else { dot.style.background='#FFE66D'; lbl.textContent='💾 Local mode'; }
+  }
+
+  // ---- NOTIFICATION PANEL ----
+  window.openNotifPanel = function() {
+    loadNotifSettings();
+    updateNotifUI();
+    document.getElementById('notifPanel').classList.add('open');
+  };
+  window.closeNotifPanel = function() {
+    document.getElementById('notifPanel').classList.remove('open');
+  };
+
+  function updateNotifUI() {
+    const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+    const supported = 'Notification' in window;
+
+    // Permission status
+    const statusEl = document.getElementById('notifPermStatus');
+    if(statusEl) {
+      if(!supported) statusEl.innerHTML = '⚠️ Notifications not supported on this browser/device';
+      else if(perm==='granted') statusEl.innerHTML = '✅ Notifications are allowed on this device';
+      else if(perm==='denied')  statusEl.innerHTML = '❌ Notifications blocked — enable in device Settings';
+      else statusEl.innerHTML = '⚪ Permission not yet granted — tap Enable below';
+    }
+
+    // Master toggle
+    const master = document.getElementById('toggleMaster');
+    if(master) master.checked = notifSettings.enabled;
+
+    // Individual toggles
+    const setToggle = (id, val) => { const el=document.getElementById(id); if(el) el.checked=val; };
+    setToggle('toggleDaily',       notifSettings.dailyReminder);
+    setToggle('toggleOverdue',     notifSettings.overdueAlert);
+    setToggle('toggleCelebration', notifSettings.completionCelebration);
+
+    // Times
+    const rt = document.getElementById('reminderTimeInput');
+    if(rt) rt.value = notifSettings.reminderTime;
+    const at = document.getElementById('adminTimeInput');
+    if(at) at.value = notifSettings.adminReminderTime;
+
+    // Show/hide individual settings based on master
+    const indiv = document.getElementById('notifIndividual');
+    if(indiv) indiv.style.opacity = notifSettings.enabled ? '1' : '0.4';
+  }
+
+  window.toggleMasterNotif = async function() {
+    const el = document.getElementById('toggleMaster');
+    if(el.checked) {
+      const granted = await requestNotifPermission();
+      if(!granted) {
+        el.checked = false;
+        showToast('Please allow notifications in your device settings');
+        return;
+      }
+      notifSettings.enabled = true;
+      scheduleNotifications();
+      showToast('🔔 Notifications enabled!');
+    } else {
+      notifSettings.enabled = false;
+      notifTimers.forEach(t=>clearTimeout(t)); notifTimers=[];
+      showToast('Notifications turned off');
+    }
+    saveNotifSettings(); updateNotifUI();
+  };
+
+  window.toggleNotifType = function(type) {
+    const map = { daily:'dailyReminder', overdue:'overdueAlert', celebration:'completionCelebration' };
+    const key = map[type];
+    notifSettings[key] = document.getElementById('toggle'+type.charAt(0).toUpperCase()+type.slice(1)).checked;
+    saveNotifSettings();
+    if(notifSettings.enabled) scheduleNotifications();
+    showToast(notifSettings[key] ? '✅ Turned on' : 'Turned off');
+  };
+
+  window.saveReminderTime = function() {
+    const val = document.getElementById('reminderTimeInput').value;
+    notifSettings.reminderTime = val;
+    saveNotifSettings();
+    if(notifSettings.enabled) scheduleNotifications();
+    showToast(`⏰ Your reminder set for ${formatTime(val)}`);
+  };
+
+  window.saveAdminTime = function() {
+    const val = document.getElementById('adminTimeInput').value;
+    notifSettings.adminReminderTime = val;
+    // Apply to self too if not custom set
+    notifSettings.reminderTime = val;
+    saveNotifSettings();
+    if(notifSettings.enabled) scheduleNotifications();
+    document.getElementById('reminderTimeInput').value = val;
+    showToast(`📢 Family default set to ${formatTime(val)}`);
+  };
+
+  window.sendTestNotif = async function() {
+    const granted = await requestNotifPermission();
+    if(!granted){ showToast('Please allow notifications first'); return; }
+    sendNotification('Test Notification 🧪', 'The Martinez Wheel notifications are working!', '🔔');
+    showToast('Test notification sent!');
+  };
+
+  function formatTime(t) {
+    const [h,m] = t.split(':').map(Number);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `${h12}:${m.toString().padStart(2,'0')} ${ampm}`;
   }
 
   // ---- RENDER ----
@@ -293,70 +517,14 @@
     }).join('');
   }
 
-  // ---- THEME PANEL ----
-  window.openThemePanel = function() {
-    const panel = document.getElementById('themePanel');
-    // Render preset swatches
-    const swatches = document.getElementById('themeSWatches');
-    swatches.innerHTML = THEMES.map((t,i)=>`
-      <div class="theme-swatch${JSON.stringify(activeTheme)===JSON.stringify(t)?' active':''}"
-        style="background:${t.primary}" onclick="pickPreset(${i})" title="${t.name}">
-        <span class="swatch-emoji">${t.emoji}</span>
-        <span class="swatch-name">${t.name}</span>
-      </div>`).join('');
-    // Set custom color inputs to current theme
-    document.getElementById('cpPrimary').value   = activeTheme.primary;
-    document.getElementById('cpSecondary').value = activeTheme.secondary;
-    document.getElementById('cpAccent').value    = activeTheme.accent;
-    document.getElementById('cpBg').value        = activeTheme.bg;
-    panel.classList.add('open');
-  };
-  window.closeThemePanel = function() {
-    document.getElementById('themePanel').classList.remove('open');
-  };
-  window.pickPreset = function(idx) {
-    applyTheme(THEMES[idx]);
-    // Update active swatch highlight
-    document.querySelectorAll('.theme-swatch').forEach((s,i)=>{
-      s.classList.toggle('active', i===idx);
-    });
-    // Sync custom pickers to preset
-    document.getElementById('cpPrimary').value   = THEMES[idx].primary;
-    document.getElementById('cpSecondary').value = THEMES[idx].secondary;
-    document.getElementById('cpAccent').value    = THEMES[idx].accent;
-    document.getElementById('cpBg').value        = THEMES[idx].bg;
-  };
-  window.applyCustomTheme = function() {
-    const custom = {
-      name: 'Custom',
-      primary:   document.getElementById('cpPrimary').value,
-      secondary: document.getElementById('cpSecondary').value,
-      accent:    document.getElementById('cpAccent').value,
-      bg:        document.getElementById('cpBg').value,
-      emoji: '🎨'
-    };
-    applyTheme(custom);
-    document.querySelectorAll('.theme-swatch').forEach(s=>s.classList.remove('active'));
-    showToast('Custom theme applied! 🎨');
-  };
-  window.resetTheme = function() {
-    applyTheme(THEMES[0]);
-    showToast('Theme reset to default!');
-    window.closeThemePanel();
-  };
-
-  function showToast(msg) {
-    const t=document.getElementById('toast');
-    t.textContent=msg; t.style.opacity='1'; t.style.transform='translateY(0)';
-    setTimeout(()=>{t.style.opacity='0'; t.style.transform='translateY(20px)';},2500);
-  }
-
   // ---- ACTIONS ----
   window.toggleDay = function(ai,di) {
     if(!state.assignments[ai].days) state.assignments[ai].days=blankDays();
     state.assignments[ai].days[di]=!state.assignments[ai].days[di];
     state.assignments[ai].done=state.assignments[ai].days.some(Boolean);
     cloudSave(); renderAssignments();
+    // Check for celebration after a short delay
+    setTimeout(checkCompletionCelebration, 300);
   };
   window.reassign = function() {
     if(!state.members.length){alert('Add family members first!');return;}
@@ -367,6 +535,10 @@
     const members=shuffle([...state.members]),chores=shuffle([...state.chores]);
     state.assignments=chores.map((c,i)=>({memberId:members[i%members.length].id,choreId:c.id,done:false,days:blankDays()}));
     cloudSave(); render();
+    // Notify new week assigned
+    if(notifSettings.enabled) {
+      sendNotification('New Week, New Chores! 🎡','Check The Martinez Wheel — this week\'s chores have been assigned!','🎡');
+    }
   };
   window.openReassign = function(idx) {
     const a=state.assignments[idx],chore=state.chores.find(c=>c.id===a.choreId);
@@ -438,6 +610,43 @@
     state.chores.find(x=>x.id===id).name=v; cloudSave(); renderChores(); renderAssignments();
   };
   window.renderChoresW = ()=>renderChores();
+
+  // ---- THEME PANEL ----
+  window.openThemePanel = function() {
+    const swatches=document.getElementById('themeSWatches');
+    swatches.innerHTML=THEMES.map((t,i)=>`
+      <div class="theme-swatch${JSON.stringify(activeTheme)===JSON.stringify(t)?' active':''}"
+        style="background:${t.primary}" onclick="pickPreset(${i})" title="${t.name}">
+        <span class="swatch-emoji">${t.emoji}</span>
+        <span class="swatch-name">${t.name}</span>
+      </div>`).join('');
+    document.getElementById('cpPrimary').value   = activeTheme.primary;
+    document.getElementById('cpSecondary').value = activeTheme.secondary;
+    document.getElementById('cpAccent').value    = activeTheme.accent;
+    document.getElementById('cpBg').value        = activeTheme.bg;
+    document.getElementById('themePanel').classList.add('open');
+  };
+  window.closeThemePanel = ()=>document.getElementById('themePanel').classList.remove('open');
+  window.pickPreset = function(idx) {
+    applyTheme(THEMES[idx]);
+    document.querySelectorAll('.theme-swatch').forEach((s,i)=>s.classList.toggle('active',i===idx));
+    document.getElementById('cpPrimary').value   = THEMES[idx].primary;
+    document.getElementById('cpSecondary').value = THEMES[idx].secondary;
+    document.getElementById('cpAccent').value    = THEMES[idx].accent;
+    document.getElementById('cpBg').value        = THEMES[idx].bg;
+  };
+  window.applyCustomTheme = function() {
+    applyTheme({ name:'Custom', emoji:'🎨',
+      primary:   document.getElementById('cpPrimary').value,
+      secondary: document.getElementById('cpSecondary').value,
+      accent:    document.getElementById('cpAccent').value,
+      bg:        document.getElementById('cpBg').value,
+    });
+    document.querySelectorAll('.theme-swatch').forEach(s=>s.classList.remove('active'));
+    showToast('Custom theme applied! 🎨');
+  };
+  window.resetTheme = function() { applyTheme(THEMES[0]); showToast('Theme reset!'); window.closeThemePanel(); };
+
   window.switchTab = function(tab,el) {
     document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
@@ -445,35 +654,37 @@
     document.getElementById('view-'+tab).classList.add('active');
   };
 
+  function showToast(msg) {
+    const t=document.getElementById('toast');
+    t.textContent=msg; t.style.opacity='1'; t.style.transform='translateX(-50%) translateY(0)';
+    setTimeout(()=>{t.style.opacity='0'; t.style.transform='translateX(-50%) translateY(20px)';},2500);
+  }
+
   // ---- BOOT ----
   loadSavedTheme();
+  loadNotifSettings();
   const lastPin=localStorage.getItem('lastPin');
   if(lastPin){ document.getElementById('pinInput').value=lastPin; document.getElementById('pinHint').textContent=`Last used: ${lastPin}`; }
 </script>
 
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');
-  :root{
-    --bg:#FFF8F0; --primary:#FF6B6B; --secondary:#4ECDC4;
-    --accent:#FFE66D; --text:#2D3436; --muted:#888; --border:#f0e8df;
-    --shadow:0 4px 20px rgba(0,0,0,0.08); --radius:20px;
-  }
+  :root{--bg:#FFF8F0;--primary:#FF6B6B;--secondary:#4ECDC4;--accent:#FFE66D;--text:#2D3436;--muted:#888;--border:#f0e8df;--shadow:0 4px 20px rgba(0,0,0,0.08);--radius:20px;}
   *{box-sizing:border-box;margin:0;padding:0;}
   body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;transition:background 0.4s ease;}
   body::before{content:'';position:fixed;top:-100px;right:-100px;width:400px;height:400px;background:radial-gradient(circle,rgba(255,107,107,0.1),transparent 70%);pointer-events:none;z-index:0;}
   body::after{content:'';position:fixed;bottom:-80px;left:-80px;width:350px;height:350px;background:radial-gradient(circle,rgba(78,205,196,0.1),transparent 70%);pointer-events:none;z-index:0;}
 
-  /* PIN SCREEN */
+  /* PIN */
   #pinScreen{position:fixed;inset:0;background:var(--primary);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;padding:32px 24px;transition:background 0.4s ease;}
   .pin-logo{font-family:'Fredoka One',cursive;font-size:2.6rem;color:white;margin-bottom:4px;text-align:center;}
   .pin-family{font-family:'Fredoka One',cursive;font-size:1.1rem;color:rgba(255,255,255,0.75);margin-bottom:28px;text-align:center;letter-spacing:1px;}
   .pin-box{background:white;border-radius:24px;padding:28px 22px;width:100%;max-width:340px;box-shadow:0 20px 60px rgba(0,0,0,0.2);}
   .pin-box h2{font-family:'Fredoka One',cursive;font-size:1.25rem;margin-bottom:6px;}
   .pin-box p{font-size:0.8rem;color:var(--muted);margin-bottom:16px;line-height:1.5;}
-  .pin-input{width:100%;padding:13px 18px;border:2.5px solid var(--border);border-radius:50px;font-family:'Nunito',sans-serif;font-size:1.05rem;font-weight:800;letter-spacing:3px;text-align:center;outline:none;margin-bottom:12px;transition:border-color 0.2s;}
+  .pin-input{width:100%;padding:13px 18px;border:2.5px solid var(--border);border-radius:50px;font-family:'Nunito',sans-serif;font-size:1.05rem;font-weight:800;letter-spacing:3px;text-align:center;outline:none;margin-bottom:12px;}
   .pin-input:focus{border-color:var(--primary);}
-  .pin-btn{width:100%;padding:14px;background:var(--primary);color:white;border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:1rem;cursor:pointer;transition:opacity 0.2s;}
-  .pin-btn:active{opacity:0.85;}
+  .pin-btn{width:100%;padding:14px;background:var(--primary);color:white;border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:1rem;cursor:pointer;}
   .pin-error{color:var(--primary);font-size:0.8rem;font-weight:700;min-height:20px;margin-top:10px;text-align:center;}
   .pin-hint{font-size:0.72rem;color:var(--muted);text-align:center;margin-top:6px;}
 
@@ -483,9 +694,8 @@
   .hdr-top{display:flex;align-items:center;justify-content:space-between;}
   .hdr-title{font-family:'Fredoka One',cursive;font-size:1.3rem;line-height:1.1;}
   .hdr-subtitle{font-size:0.65rem;opacity:0.75;font-weight:600;letter-spacing:0.5px;margin-top:1px;}
-  .hdr-actions{display:flex;gap:8px;align-items:center;}
-  .theme-btn{background:rgba(255,255,255,0.22);border:none;color:white;border-radius:50px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.76rem;cursor:pointer;}
-  .logout-btn{background:rgba(255,255,255,0.22);border:none;color:white;border-radius:50px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.76rem;cursor:pointer;}
+  .hdr-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;}
+  .theme-btn,.notif-btn,.logout-btn{background:rgba(255,255,255,0.22);border:none;color:white;border-radius:50px;padding:6px 11px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.74rem;cursor:pointer;}
   .hdr-meta{display:flex;align-items:center;gap:10px;margin-top:4px;}
   .week-sub{font-size:0.74rem;opacity:0.85;}
   .sync-badge{font-size:0.68rem;font-weight:800;background:rgba(255,255,255,0.25);padding:2px 10px;border-radius:50px;transition:opacity 0.5s;opacity:0;}
@@ -493,7 +703,7 @@
   .online-dot{width:7px;height:7px;border-radius:50%;}
   .online-lbl{font-size:0.66rem;opacity:0.85;}
 
-  .tabs{display:flex;background:white;border-bottom:2px solid var(--border);position:sticky;top:78px;z-index:99;}
+  .tabs{display:flex;background:white;border-bottom:2px solid var(--border);position:sticky;top:82px;z-index:99;}
   .tab{flex:1;padding:11px 6px;text-align:center;font-weight:700;font-size:0.8rem;cursor:pointer;color:var(--muted);border-bottom:3px solid transparent;transition:all 0.2s;margin-bottom:-2px;}
   .tab.active{color:var(--primary);border-bottom-color:var(--primary);}
 
@@ -502,7 +712,7 @@
 
   .week-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
   .week-label{font-family:'Fredoka One',cursive;font-size:1.15rem;color:var(--primary);}
-  .spin-btn{background:var(--accent);border:none;border-radius:50px;padding:8px 16px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.8rem;cursor:pointer;color:var(--text);box-shadow:0 3px 10px rgba(0,0,0,0.1);}
+  .spin-btn{background:var(--accent);border:none;border-radius:50px;padding:8px 16px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.8rem;cursor:pointer;color:var(--text);}
   .spin-btn:active{transform:scale(0.95);}
 
   .progress-label{font-size:0.76rem;color:var(--muted);margin-bottom:5px;font-weight:700;}
@@ -537,9 +747,8 @@
   .member-list{margin-bottom:22px;}
   .member-item{background:white;border-radius:15px;padding:13px 15px;margin-bottom:10px;box-shadow:var(--shadow);display:flex;align-items:center;gap:11px;}
   .member-item .name{font-weight:800;flex:1;}
-  .remove-btn{background:none;border:none;color:#ccc;cursor:pointer;font-size:1.1rem;padding:4px;transition:color 0.2s;}
-  .remove-btn:hover{color:var(--primary);}
-  .edit-btn{background:none;border:none;color:#bbb;cursor:pointer;font-size:0.92rem;padding:4px 5px;line-height:1;}
+  .remove-btn{background:none;border:none;color:#ccc;cursor:pointer;font-size:1.1rem;padding:4px;}
+  .edit-btn{background:none;border:none;color:#bbb;cursor:pointer;font-size:0.92rem;padding:4px 5px;}
 
   .add-form{display:flex;gap:9px;margin-bottom:22px;}
   .add-input{flex:1;padding:11px 15px;border:2px solid var(--border);border-radius:50px;font-family:'Nunito',sans-serif;font-size:0.88rem;outline:none;background:white;}
@@ -558,7 +767,7 @@
   .inline-save-btn{background:var(--secondary);color:white;border:none;border-radius:50px;padding:7px 13px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.8rem;cursor:pointer;}
   .inline-cancel-btn{background:#f0f0f0;color:#888;border:none;border-radius:50px;padding:7px 10px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.8rem;cursor:pointer;}
 
-  /* REASSIGN MODAL */
+  /* MODAL */
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200;display:none;align-items:flex-end;}
   .modal-overlay.open{display:flex;}
   .modal{background:white;border-radius:26px 26px 0 0;padding:22px 20px 40px;width:100%;animation:slideUp 0.25s ease;}
@@ -568,14 +777,16 @@
   select{width:100%;padding:12px 15px;border:2px solid var(--border);border-radius:13px;font-family:'Nunito',sans-serif;font-size:0.9rem;outline:none;margin-bottom:11px;background:white;}
   .confirm-btn{width:100%;padding:14px;background:var(--primary);color:white;border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.98rem;cursor:pointer;margin-top:5px;}
 
+  /* SLIDE PANELS shared */
+  .panel-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:300;display:none;align-items:flex-end;}
+  .panel-overlay.open{display:flex;}
+  .panel-sheet{background:white;border-radius:28px 28px 0 0;padding:22px 20px 44px;width:100%;max-height:90vh;overflow-y:auto;animation:slideUp 0.28s ease;}
+  .panel-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
+  .panel-hdr h3{font-family:'Fredoka One',cursive;font-size:1.3rem;}
+  .panel-close{background:#f0f0f0;border:none;border-radius:50%;width:32px;height:32px;cursor:pointer;font-size:1rem;}
+  .panel-section-label{font-weight:800;font-size:0.82rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;margin-top:18px;}
+
   /* THEME PANEL */
-  .theme-panel-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:300;display:none;align-items:flex-end;}
-  .theme-panel-overlay.open{display:flex;}
-  .theme-panel{background:white;border-radius:28px 28px 0 0;padding:22px 20px 44px;width:100%;max-height:88vh;overflow-y:auto;animation:slideUp 0.28s ease;}
-  .theme-panel-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
-  .theme-panel-hdr h3{font-family:'Fredoka One',cursive;font-size:1.3rem;}
-  .theme-panel-close{background:#f0f0f0;border:none;border-radius:50%;width:32px;height:32px;cursor:pointer;font-size:1rem;}
-  .theme-section-label{font-weight:800;font-size:0.82rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;margin-top:18px;}
   .theme-swatches{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:6px;}
   .theme-swatch{border-radius:14px;padding:12px 6px 8px;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;border:3px solid transparent;transition:all 0.18s;}
   .theme-swatch.active{border-color:var(--text);transform:scale(1.06);}
@@ -583,13 +794,33 @@
   .swatch-name{font-size:0.62rem;font-weight:800;color:white;text-align:center;line-height:1.2;}
   .custom-section{background:#f8f8f8;border-radius:16px;padding:16px;margin-top:6px;}
   .color-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
-  .color-row label{font-size:0.85rem;font-weight:700;color:var(--text);}
+  .color-row label{font-size:0.85rem;font-weight:700;}
   .color-row input[type=color]{width:52px;height:36px;border:none;border-radius:10px;cursor:pointer;padding:2px;}
   .apply-custom-btn{width:100%;padding:13px;background:var(--primary);color:white;border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.95rem;cursor:pointer;margin-top:4px;}
   .reset-theme-btn{width:100%;padding:11px;background:#f0f0f0;color:var(--muted);border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.88rem;cursor:pointer;margin-top:10px;}
 
+  /* NOTIFICATION PANEL */
+  .notif-status-box{background:#f8f8f8;border-radius:14px;padding:13px 16px;font-size:0.85rem;font-weight:700;margin-bottom:4px;}
+  .notif-row{display:flex;align-items:center;justify-content:space-between;background:white;border-radius:14px;padding:14px 16px;margin-bottom:10px;box-shadow:var(--shadow);}
+  .notif-row-info{flex:1;}
+  .notif-row-title{font-weight:800;font-size:0.9rem;}
+  .notif-row-desc{font-size:0.76rem;color:var(--muted);margin-top:2px;}
+  /* Toggle switch */
+  .toggle-wrap{position:relative;width:48px;height:26px;flex-shrink:0;}
+  .toggle-wrap input{opacity:0;width:0;height:0;}
+  .toggle-slider{position:absolute;inset:0;background:#ccc;border-radius:26px;cursor:pointer;transition:0.3s;}
+  .toggle-slider:before{content:'';position:absolute;width:20px;height:20px;left:3px;bottom:3px;background:white;border-radius:50%;transition:0.3s;}
+  input:checked+.toggle-slider{background:var(--primary);}
+  input:checked+.toggle-slider:before{transform:translateX(22px);}
+  .time-row{display:flex;align-items:center;justify-content:space-between;background:white;border-radius:14px;padding:14px 16px;margin-bottom:10px;box-shadow:var(--shadow);gap:12px;}
+  .time-row label{font-weight:800;font-size:0.88rem;flex:1;}
+  .time-row input[type=time]{border:2px solid var(--border);border-radius:10px;padding:7px 10px;font-family:'Nunito',sans-serif;font-size:0.88rem;font-weight:700;outline:none;color:var(--text);}
+  .time-save-btn{background:var(--primary);color:white;border:none;border-radius:50px;padding:8px 14px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.8rem;cursor:pointer;}
+  .test-notif-btn{width:100%;padding:13px;background:#f0f0f0;color:var(--text);border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.9rem;cursor:pointer;margin-top:8px;}
+  #notifIndividual{transition:opacity 0.3s;}
+
   /* TOAST */
-  #toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--text);color:white;padding:10px 22px;border-radius:50px;font-size:0.85rem;font-weight:700;opacity:0;transition:opacity 0.3s,transform 0.3s;z-index:500;pointer-events:none;white-space:nowrap;}
+  #toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--text);color:white;padding:10px 22px;border-radius:50px;font-size:0.85rem;font-weight:700;opacity:0;transition:opacity 0.3s,transform 0.3s;z-index:999;pointer-events:none;white-space:nowrap;}
 </style>
 </head>
 <body>
@@ -618,8 +849,9 @@
         <div class="hdr-subtitle">FAMILY CHORE TRACKER</div>
       </div>
       <div class="hdr-actions">
+        <button class="notif-btn" onclick="openNotifPanel()">🔔 Alerts</button>
         <button class="theme-btn" onclick="openThemePanel()">🎨 Theme</button>
-        <button class="logout-btn" onclick="logout()">Switch PIN</button>
+        <button class="logout-btn" onclick="logout()">⇄ PIN</button>
       </div>
     </div>
     <div class="hdr-meta">
@@ -684,35 +916,104 @@
   </div>
 </div>
 
-<!-- THEME PANEL -->
-<div class="theme-panel-overlay" id="themePanel" onclick="if(event.target===this)closeThemePanel()">
-  <div class="theme-panel">
-    <div class="theme-panel-hdr">
-      <h3>🎨 Choose a Theme</h3>
-      <button class="theme-panel-close" onclick="closeThemePanel()">✕</button>
+<!-- NOTIFICATION PANEL -->
+<div class="panel-overlay" id="notifPanel" onclick="if(event.target===this)closeNotifPanel()">
+  <div class="panel-sheet">
+    <div class="panel-hdr">
+      <h3>🔔 Notification Settings</h3>
+      <button class="panel-close" onclick="closeNotifPanel()">✕</button>
     </div>
 
-    <div class="theme-section-label">Preset Palettes</div>
-    <div class="theme-swatches" id="themeSWatches"></div>
+    <div class="notif-status-box" id="notifPermStatus">Checking notification status…</div>
 
-    <div class="theme-section-label">Custom Colors</div>
+    <div class="panel-section-label">Master Control</div>
+    <div class="notif-row">
+      <div class="notif-row-info">
+        <div class="notif-row-title">Enable Notifications</div>
+        <div class="notif-row-desc">Turn all notifications on or off for this device</div>
+      </div>
+      <label class="toggle-wrap">
+        <input type="checkbox" id="toggleMaster" onchange="toggleMasterNotif()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div id="notifIndividual">
+      <div class="panel-section-label">Notification Types</div>
+
+      <div class="notif-row">
+        <div class="notif-row-info">
+          <div class="notif-row-title">🔔 Daily Reminder</div>
+          <div class="notif-row-desc">Nudge to check off your chores at your set time</div>
+        </div>
+        <label class="toggle-wrap">
+          <input type="checkbox" id="toggleDaily" onchange="toggleNotifType('daily')">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="notif-row">
+        <div class="notif-row-info">
+          <div class="notif-row-title">⚠️ Overdue Alert</div>
+          <div class="notif-row-desc">Alert at 9pm if chores aren't done for the day</div>
+        </div>
+        <label class="toggle-wrap">
+          <input type="checkbox" id="toggleOverdue" onchange="toggleNotifType('overdue')">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="notif-row">
+        <div class="notif-row-info">
+          <div class="notif-row-title">🎉 Completion Celebration</div>
+          <div class="notif-row-desc">Celebrate when all chores are done for the day!</div>
+        </div>
+        <label class="toggle-wrap">
+          <input type="checkbox" id="toggleCelebration" onchange="toggleNotifType('celebration')">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="panel-section-label">My Reminder Time</div>
+      <div class="time-row">
+        <label>My daily reminder</label>
+        <input type="time" id="reminderTimeInput" value="18:00">
+        <button class="time-save-btn" onclick="saveReminderTime()">Save</button>
+      </div>
+
+      <div class="panel-section-label">Family Default Time (Admin)</div>
+      <div class="notif-row" style="background:#fff8f0;border:1px solid var(--border);">
+        <div class="notif-row-info">
+          <div class="notif-row-title">📢 Set for whole family</div>
+          <div class="notif-row-desc">Sets a default reminder time for all family members. Each person can override with their own time above.</div>
+        </div>
+      </div>
+      <div class="time-row">
+        <label>Family default</label>
+        <input type="time" id="adminTimeInput" value="18:00">
+        <button class="time-save-btn" onclick="saveAdminTime()">Apply</button>
+      </div>
+
+      <button class="test-notif-btn" onclick="sendTestNotif()">🧪 Send a Test Notification</button>
+    </div>
+  </div>
+</div>
+
+<!-- THEME PANEL -->
+<div class="panel-overlay" id="themePanel" onclick="if(event.target===this)closeThemePanel()">
+  <div class="panel-sheet">
+    <div class="panel-hdr">
+      <h3>🎨 Choose a Theme</h3>
+      <button class="panel-close" onclick="closeThemePanel()">✕</button>
+    </div>
+    <div class="panel-section-label">Preset Palettes</div>
+    <div class="theme-swatches" id="themeSWatches"></div>
+    <div class="panel-section-label">Custom Colors</div>
     <div class="custom-section">
-      <div class="color-row">
-        <label>Primary Color</label>
-        <input type="color" id="cpPrimary" value="#FF6B6B">
-      </div>
-      <div class="color-row">
-        <label>Secondary Color</label>
-        <input type="color" id="cpSecondary" value="#4ECDC4">
-      </div>
-      <div class="color-row">
-        <label>Accent Color</label>
-        <input type="color" id="cpAccent" value="#FFE66D">
-      </div>
-      <div class="color-row">
-        <label>Background Color</label>
-        <input type="color" id="cpBg" value="#FFF8F0">
-      </div>
+      <div class="color-row"><label>Primary Color</label><input type="color" id="cpPrimary" value="#FF6B6B"></div>
+      <div class="color-row"><label>Secondary Color</label><input type="color" id="cpSecondary" value="#4ECDC4"></div>
+      <div class="color-row"><label>Accent Color</label><input type="color" id="cpAccent" value="#FFE66D"></div>
+      <div class="color-row"><label>Background Color</label><input type="color" id="cpBg" value="#FFF8F0"></div>
       <button class="apply-custom-btn" onclick="applyCustomTheme()">✓ Apply Custom Theme</button>
     </div>
     <button class="reset-theme-btn" onclick="resetTheme()">↺ Reset to Default</button>
