@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="The Martinez Wheel">
 <title>The Martinez Wheel</title>
-<!-- v1.3.0 — Emoji & color picker per family member -->
+<!-- v1.3.1 — Inclusive skin tone selector for people emojis -->
 
 <script type="module">
   import { initializeApp }
@@ -36,8 +36,21 @@
   const DAYS    = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
   // ---- EMOJI CATEGORIES ----
+  // People emojis that support skin tone modifiers (Unicode Fitzpatrick scale)
+  const SKIN_TONES = [
+    { label:'🟡 Default',      modifier:'' },
+    { label:'🏻 Light',         modifier:'\u{1F3FB}' },
+    { label:'🏼 Medium-Light',  modifier:'\u{1F3FC}' },
+    { label:'🏽 Medium',        modifier:'\u{1F3FD}' },
+    { label:'🏾 Medium-Dark',   modifier:'\u{1F3FE}' },
+    { label:'🏿 Dark',          modifier:'\u{1F3FF}' },
+  ];
+
+  // Base people emojis that support skin tone modifiers
+  const PEOPLE_BASE = ['👩','👨','🧒','👦','👧','🧑','👴','👵','👶','🧔','👱','👸','🤴','🦸','🦹','🧙','🧚','🧛','🧜','🧝','💆','💇','🙋','🙍','🙎','💁','🤷','🤦','🧏','🫅'];
+
   const EMOJI_CATEGORIES = [
-    { label:'😀 People', emojis:['👩','👨','🧒','👦','👧','🧑','👴','👵','👶','🧔','👱','👸','🤴','🦸','🦹','🧙','🧚','🧛','🧜','🧝','😀','😎','🥳','🤩','😊','🤗','😇','🥸','🤓','😏'] },
+    { label:'😀 People', emojis:PEOPLE_BASE, skinToneSupport: true },
     { label:'🐶 Animals', emojis:['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🦆','🦅','🦉','🦇','🐺','🐗','🦝','🦊','🐴','🦄','🐝','🦋'] },
     { label:'⚽ Sports', emojis:['⚽','🏀','🏈','⚾','🎾','🏐','🏉','🎱','🏓','🏸','🥊','🥋','🎯','🏹','🎣','🤿','🎽','🛹','🛼','🏋️','🤸','⛹️','🤺','🏊','🚴','🧗','🏇','⛷️','🏂'] },
     { label:'🎨 Creative', emojis:['🎨','🎭','🎪','🎬','🎤','🎧','🎼','🎹','🥁','🎸','🎺','🎻','🪕','🎮','🕹️','🎲','♟️','🎯','🎳','🎰','🃏','🀄','🎴','🖼️','🖌️','✏️','📝','📚','📖','🔬'] },
@@ -46,6 +59,30 @@
     { label:'🚗 Travel', emojis:['🚗','🚕','🚙','🚌','🚎','🏎️','🚓','🚑','🚒','✈️','🚀','🛸','🚁','⛵','🚢','🚂','🚆','🚇','🛺','🚲','🛴','🛵','🏍️','🚜','🚛','🏠','🏡','🏰','🗼','🗽'] },
     { label:'💎 Objects', emojis:['💎','👑','🏆','🥇','🎖️','🏅','🎗️','⭐','🌟','💫','✨','🎉','🎊','🎁','🎀','🎈','🪄','🔮','💡','🔑','🗝️','⚡','💥','❤️','🧡','💛','💚','💙','💜','🖤'] },
   ];
+
+  // Check if an emoji base supports skin tones
+  function isPeopleEmoji(emoji) {
+    // Strip any existing skin tone modifier to get the base
+    const base = emoji.replace(/[\u{1F3FB}-\u{1F3FF}]/u, '');
+    return PEOPLE_BASE.includes(base);
+  }
+
+  // Get the base emoji without skin tone modifier
+  function getBaseEmoji(emoji) {
+    return emoji.replace(/[\u{1F3FB}-\u{1F3FF}]/u, '');
+  }
+
+  // Apply a skin tone modifier to a base emoji
+  function applyTone(baseEmoji, modifier) {
+    return baseEmoji + modifier;
+  }
+
+  // Currently selected skin tone modifier (persists per device)
+  let selectedToneModifier = '';
+  try {
+    selectedToneModifier = localStorage.getItem('cw_skin_tone') || '';
+  } catch(e) {}
+
 
   // ---- AVATAR COLOR PALETTE ----
   const AVATAR_COLORS = [
@@ -266,15 +303,10 @@
 
   function renderEmojiCategories(currentEmoji) {
     const container = document.getElementById('emojiCategoryTabs');
-    const emojiGrid = document.getElementById('emojiGrid');
-
-    // Render category tabs
     container.innerHTML = EMOJI_CATEGORIES.map((cat,i)=>`
       <button class="emoji-cat-tab${i===0?' active':''}" onclick="switchEmojiCat(${i})" id="emojiCatTab${i}">
         ${cat.label.split(' ')[0]}
       </button>`).join('');
-
-    // Render first category
     renderEmojiGrid(0, currentEmoji);
   }
 
@@ -286,26 +318,81 @@
 
   function renderEmojiGrid(catIdx, currentEmoji) {
     const grid = document.getElementById('emojiGrid');
-    grid.innerHTML = EMOJI_CATEGORIES[catIdx].emojis.map(e=>`
-      <div class="emoji-option${e===currentEmoji?' selected':''}" onclick="selectEmoji('${e}')">${e}</div>
-    `).join('');
+    const cat = EMOJI_CATEGORIES[catIdx];
+    const currentBase = getBaseEmoji(currentEmoji||'');
+
+    // Show skin tone strip only for People category
+    const skinToneStrip = cat.skinToneSupport ? `
+      <div class="skin-tone-strip" id="skinToneStrip">
+        <div class="skin-tone-label">Skin tone:</div>
+        ${SKIN_TONES.map(t=>`
+          <div class="skin-tone-btn${t.modifier===selectedToneModifier?' active':''}"
+            onclick="selectSkinTone('${t.modifier}')"
+            title="${t.label}">
+            ${'👋' + t.modifier}
+          </div>`).join('')}
+      </div>` : '';
+
+    // Render emojis with current tone applied
+    const emojiHtml = cat.emojis.map(e => {
+      const display = cat.skinToneSupport ? applyTone(e, selectedToneModifier) : e;
+      const isSelected = (currentEmoji === display) ||
+        (cat.skinToneSupport && getBaseEmoji(currentEmoji||'') === e);
+      return `<div class="emoji-option${isSelected?' selected':''}"
+        onclick="selectEmoji('${e}', ${!!cat.skinToneSupport})">${display}</div>`;
+    }).join('');
+
+    grid.innerHTML = skinToneStrip + `<div class="emoji-inner-grid" id="emojiInnerGrid">${emojiHtml}</div>`;
   }
 
-  window.selectEmoji = function(emoji) {
-    // Update preview
-    document.getElementById('avatarPreview').textContent = emoji;
-    // Highlight selected
-    document.querySelectorAll('.emoji-option').forEach(el=>{
-      el.classList.toggle('selected', el.textContent===emoji);
+  window.selectSkinTone = function(modifier) {
+    selectedToneModifier = modifier;
+    try { localStorage.setItem('cw_skin_tone', modifier); } catch(e) {}
+
+    // Update tone button highlights
+    document.querySelectorAll('.skin-tone-btn').forEach((btn, i) => {
+      btn.classList.toggle('active', SKIN_TONES[i].modifier === modifier);
     });
+
+    // Re-render emoji grid with new tone
+    const activeCatIdx = [...document.querySelectorAll('.emoji-cat-tab')]
+      .findIndex(t => t.classList.contains('active'));
+    const member = state.members.find(m=>m.id===editingMemberId);
+
+    // Re-render just the inner emoji grid
+    const cat = EMOJI_CATEGORIES[activeCatIdx >= 0 ? activeCatIdx : 0];
+    const currentEmoji = member?.emoji || '';
+    const emojiHtml = cat.emojis.map(e => {
+      const display = applyTone(e, modifier);
+      const isSelected = getBaseEmoji(currentEmoji) === e;
+      return `<div class="emoji-option${isSelected?' selected':''}"
+        onclick="selectEmoji('${e}', true)">${display}</div>`;
+    }).join('');
+    const inner = document.getElementById('emojiInnerGrid');
+    if(inner) inner.innerHTML = emojiHtml;
+
+    showToast('Skin tone updated! ✊🏽');
+  };
+
+  window.selectEmoji = function(baseEmoji, applyToneModifier) {
+    // Apply current skin tone if this is a people emoji
+    const finalEmoji = applyToneModifier
+      ? applyTone(baseEmoji, selectedToneModifier)
+      : baseEmoji;
+
+    // Update live preview
+    document.getElementById('avatarPreview').textContent = finalEmoji;
+
+    // Highlight selected in grid
+    document.querySelectorAll('.emoji-option').forEach(el => {
+      const elBase = getBaseEmoji(el.textContent.trim());
+      el.classList.toggle('selected', elBase === baseEmoji);
+    });
+
     // Save to member
     if(editingMemberId) {
       const member = state.members.find(m=>m.id===editingMemberId);
-      if(member) {
-        member.emoji = emoji;
-        cloudSave();
-        render();
-      }
+      if(member) { member.emoji = finalEmoji; cloudSave(); render(); }
     }
   };
 
@@ -794,7 +881,13 @@
   .emoji-cat-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;}
   .emoji-cat-tab{background:#f0f0f0;border:none;border-radius:50px;padding:6px 12px;font-size:0.78rem;font-weight:700;cursor:pointer;color:var(--muted);transition:all 0.15s;}
   .emoji-cat-tab.active{background:var(--primary);color:white;}
-  .emoji-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;margin-bottom:16px;max-height:160px;overflow-y:auto;}
+  .emoji-grid{margin-bottom:16px;max-height:200px;overflow-y:auto;}
+  .skin-tone-strip{display:flex;align-items:center;gap:6px;padding:10px 0 10px;border-bottom:1px solid var(--border);margin-bottom:10px;flex-wrap:wrap;}
+  .skin-tone-label{font-size:0.72rem;font-weight:800;color:var(--muted);margin-right:4px;white-space:nowrap;}
+  .skin-tone-btn{font-size:1.4rem;cursor:pointer;padding:4px;border-radius:8px;border:2.5px solid transparent;transition:all 0.15s;-webkit-tap-highlight-color:transparent;}
+  .skin-tone-btn.active{border-color:var(--primary);background:var(--accent);}
+  .skin-tone-btn:active{transform:scale(0.85);}
+  .emoji-inner-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;}
   .emoji-option{font-size:1.5rem;text-align:center;padding:6px 4px;border-radius:10px;cursor:pointer;transition:all 0.15s;user-select:none;-webkit-tap-highlight-color:transparent;}
   .emoji-option:active{transform:scale(0.85);}
   .emoji-option.selected{background:var(--accent);border-radius:10px;}
