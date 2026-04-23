@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="The Martinez Wheel">
 <title>The Martinez Wheel</title>
-<!-- v1.4.0 — Points & rewards system with leaderboard -->
+<!-- v1.5.0 — History export PDF + CSV -->
 
 <script type="module">
   import { initializeApp }
@@ -733,6 +733,212 @@
     }).join('');
   }
 
+  // ---- EXPORT HELPERS ----
+  function getLast4Weeks() {
+    const hist = state.history || [];
+    // Include current week as well
+    const current = { weekStart: state.weekStart, assignments: state.assignments || [] };
+    const all = [...hist, current];
+    // Sort newest first, take last 4
+    return all.sort((a,b) => b.weekStart.localeCompare(a.weekStart)).slice(0, 4);
+  }
+
+  function getExportOrganization() {
+    return document.getElementById('exportOrgSelect')?.value || 'week';
+  }
+
+  // ---- CSV EXPORT ----
+  window.exportCSV = function() {
+    const weeks = getLast4Weeks();
+    const org = getExportOrganization();
+    let rows = [];
+
+    if(org === 'week') {
+      // Organized by week
+      rows.push(['Week', 'Person', 'Chore', 'Sun','Mon','Tue','Wed','Thu','Fri','Sat','Days Completed','Total Days']);
+      weeks.forEach(week => {
+        (week.assignments||[]).forEach(a => {
+          const m = state.members.find(x=>x.id===a.memberId);
+          const c = state.chores.find(x=>x.id===a.choreId);
+          if(!m||!c) return;
+          const days = a.days||Array(7).fill(false);
+          const cnt = days.filter(Boolean).length;
+          rows.push([
+            getWeekLabel(week.weekStart),
+            m.name, c.name,
+            ...days.map(d=>d?'✓':''),
+            cnt, 7
+          ]);
+        });
+        rows.push([]); // blank row between weeks
+      });
+    } else {
+      // Organized by person
+      rows.push(['Person', 'Week', 'Chore', 'Sun','Mon','Tue','Wed','Thu','Fri','Sat','Days Completed','Total Days']);
+      state.members.forEach(m => {
+        weeks.forEach(week => {
+          const myAssignments = (week.assignments||[]).filter(a=>a.memberId===m.id);
+          myAssignments.forEach(a => {
+            const c = state.chores.find(x=>x.id===a.choreId);
+            if(!c) return;
+            const days = a.days||Array(7).fill(false);
+            const cnt = days.filter(Boolean).length;
+            rows.push([
+              m.name,
+              getWeekLabel(week.weekStart),
+              c.name,
+              ...days.map(d=>d?'✓':''),
+              cnt, 7
+            ]);
+          });
+        });
+        rows.push([]); // blank row between members
+      });
+    }
+
+    // Add summary row
+    rows.push([]);
+    rows.push(['SUMMARY — Last 4 Weeks']);
+    rows.push(['Person', 'Total Chores Assigned', 'Total Days Completed', 'Completion %', 'Total Stars']);
+    state.members.forEach(m => {
+      let totalAssigned = 0, totalDone = 0;
+      weeks.forEach(week => {
+        const myA = (week.assignments||[]).filter(a=>a.memberId===m.id);
+        myA.forEach(a => {
+          totalAssigned += 7;
+          totalDone += (a.days||[]).filter(Boolean).length;
+        });
+      });
+      const pct = totalAssigned ? Math.round(totalDone/totalAssigned*100) : 0;
+      rows.push([m.name, totalAssigned, totalDone, pct+'%', getMemberTotalStars(m.id)+'⭐']);
+    });
+
+    // Convert to CSV string
+    const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Martinez-Wheel-History-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('📊 CSV downloaded!');
+  };
+
+  // ---- PDF EXPORT ----
+  window.exportPDF = function() {
+    const weeks = getLast4Weeks();
+    const org = getExportOrganization();
+    const today = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+
+    let html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Martinez Wheel — History Report</title>
+    <style>
+      body{font-family:Arial,sans-serif;color:#2D3436;padding:32px;max-width:900px;margin:0 auto;}
+      h1{color:#FF6B6B;font-size:24px;margin-bottom:4px;}
+      .subtitle{color:#888;font-size:13px;margin-bottom:28px;}
+      h2{color:#FF6B6B;font-size:16px;border-bottom:2px solid #FF6B6B;padding-bottom:6px;margin-top:28px;margin-bottom:14px;}
+      h3{color:#4ECDC4;font-size:14px;margin-bottom:10px;margin-top:18px;}
+      table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px;}
+      th{background:#2D3436;color:white;padding:8px 10px;text-align:left;}
+      td{padding:7px 10px;border-bottom:1px solid #f0e8df;}
+      tr:nth-child(even) td{background:#fafafa;}
+      .done{color:#4CAF50;font-weight:bold;}
+      .miss{color:#ccc;}
+      .pct-high{color:#4CAF50;font-weight:bold;}
+      .pct-low{color:#FF6B6B;}
+      .summary-box{background:#FFF8F0;border-left:4px solid #FF6B6B;padding:14px 18px;border-radius:8px;margin-top:28px;}
+      .summary-box h2{border:none;margin-top:0;}
+      .badge{display:inline-block;background:#FFE66D;color:#2D3436;padding:2px 8px;border-radius:50px;font-size:11px;font-weight:bold;}
+      .action-bar{display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap;}
+      .btn-print{background:#FF6B6B;color:white;border:none;border-radius:50px;padding:12px 24px;font-size:15px;font-weight:800;cursor:pointer;font-family:Arial,sans-serif;}
+      .btn-close{background:#f0f0f0;color:#2D3436;border:none;border-radius:50px;padding:12px 24px;font-size:15px;font-weight:800;cursor:pointer;font-family:Arial,sans-serif;}
+      .btn-print:active,.btn-close:active{opacity:0.8;}
+      .mobile-hint{font-size:12px;color:#888;margin-bottom:20px;background:#f8f8f8;padding:10px 14px;border-radius:10px;line-height:1.5;}
+      @media print{
+        .action-bar{display:none;}
+        .mobile-hint{display:none;}
+        body{padding:20px;}
+      }
+    </style></head><body>
+    <div class="action-bar">
+      <button class="btn-print" onclick="window.print()">🖨️ Print / Save as PDF</button>
+      <button class="btn-close" onclick="window.close()">✕ Close & Go Back</button>
+    </div>
+    <div class="mobile-hint">
+      📱 <strong>On iPhone:</strong> Tap "Print / Save as PDF" above, then tap the Share icon → "Save to Files" to save as PDF.<br>
+      💻 <strong>On computer:</strong> Click Print → choose "Save as PDF" as the destination.
+    </div>
+    <h1>🏠 The Martinez Wheel</h1>
+    <div class="subtitle">Chore History Report · Generated ${today} · Last 4 Weeks</div>`;
+
+    if(org === 'week') {
+      weeks.forEach(week => {
+        html += `<h2>📅 ${getWeekLabel(week.weekStart)}</h2>
+        <table><thead><tr><th>Person</th><th>Chore</th>
+        ${DAYS.map(d=>`<th>${d}</th>`).join('')}<th>Done</th></tr></thead><tbody>`;
+        (week.assignments||[]).forEach(a => {
+          const m=state.members.find(x=>x.id===a.memberId);
+          const c=state.chores.find(x=>x.id===a.choreId);
+          if(!m||!c) return;
+          const days=a.days||Array(7).fill(false);
+          const cnt=days.filter(Boolean).length;
+          html+=`<tr><td><strong>${m.name}</strong></td><td>${c.name}</td>
+          ${days.map(d=>`<td class="${d?'done':'miss'}">${d?'✓':'—'}</td>`).join('')}
+          <td class="${cnt===7?'pct-high':'pct-low'}">${cnt}/7</td></tr>`;
+        });
+        html += `</tbody></table>`;
+      });
+    } else {
+      // By person
+      state.members.forEach(m => {
+        html += `<h2>👤 ${m.name}</h2>`;
+        weeks.forEach(week => {
+          const myA=(week.assignments||[]).filter(a=>a.memberId===m.id);
+          if(!myA.length) return;
+          html+=`<h3>${getWeekLabel(week.weekStart)}</h3>
+          <table><thead><tr><th>Chore</th>
+          ${DAYS.map(d=>`<th>${d}</th>`).join('')}<th>Done</th></tr></thead><tbody>`;
+          myA.forEach(a=>{
+            const c=state.chores.find(x=>x.id===a.choreId);if(!c)return;
+            const days=a.days||Array(7).fill(false);
+            const cnt=days.filter(Boolean).length;
+            html+=`<tr><td>${c.name}</td>
+            ${days.map(d=>`<td class="${d?'done':'miss'}">${d?'✓':'—'}</td>`).join('')}
+            <td class="${cnt===7?'pct-high':'pct-low'}">${cnt}/7</td></tr>`;
+          });
+          html+=`</tbody></table>`;
+        });
+      });
+    }
+
+    // Summary section
+    html += `<div class="summary-box"><h2>📊 4-Week Summary</h2>
+    <table><thead><tr><th>Family Member</th><th>Days Assigned</th><th>Days Completed</th><th>Completion %</th><th>Total Stars</th></tr></thead><tbody>`;
+    state.members.forEach(m=>{
+      let totalA=0,totalD=0;
+      weeks.forEach(week=>{
+        (week.assignments||[]).filter(a=>a.memberId===m.id).forEach(a=>{
+          totalA+=7; totalD+=(a.days||[]).filter(Boolean).length;
+        });
+      });
+      const pct=totalA?Math.round(totalD/totalA*100):0;
+      html+=`<tr><td><strong>${m.name}</strong></td><td>${totalA}</td><td>${totalD}</td>
+      <td class="${pct>=80?'pct-high':'pct-low'}">${pct}%</td>
+      <td>${getMemberTotalStars(m.id)} ⭐</td></tr>`;
+    });
+    html+=`</tbody></table></div></body></html>`;
+
+    // Open in new window and trigger print
+    const win = window.open('','_blank');
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(()=>{ win.print(); }, 500);
+    showToast('📄 PDF ready — use Print → Save as PDF!');
+  };
+
   // ---- ACTIONS ----
   window.toggleDay=function(ai,di){
     if(!state.assignments[ai].days) state.assignments[ai].days=blankDays();
@@ -1124,6 +1330,18 @@
   .apply-custom-btn{width:100%;padding:13px;background:var(--primary);color:white;border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.95rem;cursor:pointer;margin-top:4px;}
   .reset-theme-btn{width:100%;padding:11px;background:#f0f0f0;color:var(--muted);border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.88rem;cursor:pointer;margin-top:10px;}
 
+  /* EXPORT */
+  .export-box{background:white;border-radius:var(--radius);padding:16px;margin-bottom:18px;box-shadow:var(--shadow);border-left:4px solid var(--secondary);}
+  .export-title{font-weight:800;font-size:0.95rem;margin-bottom:12px;color:var(--text);}
+  .export-row{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
+  .export-label{font-size:0.84rem;font-weight:700;color:var(--muted);white-space:nowrap;}
+  .export-select{flex:1;padding:9px 12px;border:2px solid var(--border);border-radius:10px;font-family:'Nunito',sans-serif;font-size:0.86rem;font-weight:700;outline:none;background:white;color:var(--text);}
+  .export-btns{display:flex;gap:10px;margin-bottom:10px;}
+  .export-btn-csv{flex:1;padding:12px;background:var(--secondary);color:white;border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.88rem;cursor:pointer;}
+  .export-btn-pdf{flex:1;padding:12px;background:var(--primary);color:white;border:none;border-radius:50px;font-family:'Nunito',sans-serif;font-weight:800;font-size:0.88rem;cursor:pointer;}
+  .export-btn-csv:active,.export-btn-pdf:active{opacity:0.85;transform:scale(0.97);}
+  .export-hint{font-size:0.72rem;color:var(--muted);text-align:center;font-weight:600;}
+
   /* LEADERBOARD */
   .leaderboard-card{background:white;border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;box-shadow:var(--shadow);display:flex;align-items:center;gap:12px;border-left:5px solid #e0e0e0;}
   .leaderboard-card.gold{border-left-color:#FFD700;background:linear-gradient(135deg,#fffef0,white);}
@@ -1238,6 +1456,24 @@
 
   <div class="view" id="view-history">
     <div class="section-title">Past Weeks</div>
+
+    <!-- Export Controls -->
+    <div class="export-box">
+      <div class="export-title">📤 Export Last 4 Weeks</div>
+      <div class="export-row">
+        <label class="export-label">Organize by</label>
+        <select id="exportOrgSelect" class="export-select">
+          <option value="week">📅 By Week</option>
+          <option value="person">👤 By Person</option>
+        </select>
+      </div>
+      <div class="export-btns">
+        <button class="export-btn-csv" onclick="exportCSV()">⬇️ Download CSV</button>
+        <button class="export-btn-pdf" onclick="exportPDF()">📄 Download PDF</button>
+      </div>
+      <div class="export-hint">CSV opens in Excel or Google Sheets · PDF is a printable report</div>
+    </div>
+
     <div id="historyList"></div>
   </div>
 
