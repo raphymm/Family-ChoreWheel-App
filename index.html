@@ -832,6 +832,7 @@
     const today = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
 
     let html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>The Martinez Wheel — History Report</title>
     <style>
       body{font-family:Arial,sans-serif;color:#2D3436;padding:32px;max-width:900px;margin:0 auto;}
@@ -850,8 +851,25 @@
       .summary-box{background:#FFF8F0;border-left:4px solid #FF6B6B;padding:14px 18px;border-radius:8px;margin-top:28px;}
       .summary-box h2{border:none;margin-top:0;}
       .badge{display:inline-block;background:#FFE66D;color:#2D3436;padding:2px 8px;border-radius:50px;font-size:11px;font-weight:bold;}
-      @media print{body{padding:20px;} .no-print{display:none;}}
+      .action-bar{display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap;}
+      .btn-print{background:#FF6B6B;color:white;border:none;border-radius:50px;padding:12px 24px;font-size:15px;font-weight:800;cursor:pointer;font-family:Arial,sans-serif;}
+      .btn-close{background:#f0f0f0;color:#2D3436;border:none;border-radius:50px;padding:12px 24px;font-size:15px;font-weight:800;cursor:pointer;font-family:Arial,sans-serif;}
+      .btn-print:active,.btn-close:active{opacity:0.8;}
+      .mobile-hint{font-size:12px;color:#888;margin-bottom:20px;background:#f8f8f8;padding:10px 14px;border-radius:10px;line-height:1.5;}
+      @media print{
+        .action-bar{display:none;}
+        .mobile-hint{display:none;}
+        body{padding:20px;}
+      }
     </style></head><body>
+    <div class="action-bar">
+      <button class="btn-print" onclick="window.print()">🖨️ Print / Save as PDF</button>
+      <button class="btn-close" onclick="window.close()">✕ Close & Go Back</button>
+    </div>
+    <div class="mobile-hint">
+      📱 <strong>On iPhone:</strong> Tap "Print / Save as PDF" above, then tap the Share icon → "Save to Files" to save as PDF.<br>
+      💻 <strong>On computer:</strong> Click Print → choose "Save as PDF" as the destination.
+    </div>
     <h1>🏠 The Martinez Wheel</h1>
     <div class="subtitle">Chore History Report · Generated ${today} · Last 4 Weeks</div>`;
 
